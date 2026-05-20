@@ -17,6 +17,11 @@ class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        
 def start_web_server():
     """Avvia il server in un thread separato."""
     port = int(os.environ.get('PORT', 8080))
