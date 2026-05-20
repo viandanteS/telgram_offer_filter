@@ -2,77 +2,103 @@ import os
 import asyncio
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
+#messaggi multipli in unica stringa (bisogna dividerli in più messaggi e riportarli in coda)
+# Importiamo il nostro nuovo modulo di filtraggio!
+from filters import evaluate_message
 
-# 1. Carica le variabili d'ambiente
 load_dotenv()
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
-KEYWORDS = [kw.strip().lower() for kw in os.getenv("KEYWORDS", "").split(",")]
 
-# 2. Inizializza il client Telethon (Userbot)
-# Il primo parametro 'session_locale' crea un file .session nella cartella
+# Prende l'ID del gruppo di destinazione. Se non c'è, usa 'me' di default
+DESTINATION_GROUP = os.getenv("DESTINATION_GROUP", "me")
+
+# Se DESTINATION_GROUP è un numero (ID), va convertito in intero
+try:
+    DESTINATION_GROUP = int(DESTINATION_GROUP)
+except ValueError:
+    pass # Lascialo come stringa (es. 'me' o '@username')
+
 client = TelegramClient('session_locale', API_ID, API_HASH)
-
-# 3. Crea la coda (Queue)
 message_queue = asyncio.Queue()
 
+def split_multiple_offers(text: str) -> list[str]:
+    """
+    Divide un mega-messaggio e restituisce solo i blocchi che 
+    assomigliano a vere offerte (es. contengono un link e un prezzo).
+    """
+    if not text:
+        return []
+    
+    # Dividiamo per doppio a capo
+    raw_chunks = text.split('\n\n')
+    valid_chunks = []
+    
+    for chunk in raw_chunks:
+        chunk_pulito = chunk.strip()
+        
+        # Un frammento per essere un'offerta DEVE avere almeno un link (http) 
+        # e un simbolo dell'euro (€) o di percentuale (%).
+        if "http" in chunk_pulito and ("€" in chunk_pulito or "%" in chunk_pulito):
+            valid_chunks.append(chunk_pulito)
+            
+    return valid_chunks
+
 async def forward_to_remote(text: str, chat_name: str):
-    """
-    Modulo fittizio per il futuro invio Socket/REST.
-    """
     print(f"[REMOTING] Invio al server remoto il messaggio da {chat_name}")
-    # await httpx.post(...) o client websocket
+    # await httpx.post(...)
 
 async def message_worker():
-    """
-    Questo è il "consumatore" della coda. Gira in background.
-    Prende i messaggi accodati e li analizza uno ad uno.
-    """
     while True:
-        # Attende finché non c'è un messaggio nella coda
         event = await message_queue.get()
-        text = event.message.message # Testo del messaggio
+        text = event.message.message
         
         if text:
-            text_lower = text.lower()
+            # 1. Recupero accurato del nome della chat
+            chat = await event.get_chat()
+            # Prova a prendere il titolo (gruppi/canali), altrimenti il nome (utenti privati)
+            chat_name = getattr(chat, 'title', getattr(chat, 'first_name', 'Chat Sconosciuta'))
             
-            # Controllo keyword
-            if any(kw in text_lower for kw in KEYWORDS):
-                chat = await event.get_chat()
-                chat_name = getattr(chat, 'title', 'Chat Privata')
+            # 2. Deleghiamo l'analisi al nostro motore di Regole
+            is_valid, reason = evaluate_message(text)
+            
+            if is_valid:
+                print(f"✅ {reason} - Da: {chat_name}")
                 
-                print(f"Keyword trovata! Inoltro messaggio da: {chat_name}")
+                alert_msg = f"🔔 **Trovato in {chat_name}**\n*Motivo: {reason}*\n\n{text}"
                 
-                # Inoltra ai tuoi "Messaggi Salvati" ('me' è una keyword di Telethon)
-                alert_msg = f"🔔 **Trovato in {chat_name}**:\n\n{text}"
-                await client.send_message('me', text_lower)
+                # Inoltra al gruppo specifico indicato nel .env
+                await client.send_message(DESTINATION_GROUP, alert_msg + text)
                 
                 # Invoca il modulo remoto
                 await forward_to_remote(text, chat_name)
+            else:
+                # Puoi scommentare questa riga per debuggare i messaggi ignorati
+                print(f"❌ Ignorato: {reason}")
+                #pass
         
-        # Segnala alla coda che questo messaggio è stato elaborato
         message_queue.task_done()
 
-# 4. Handler che ascolta i nuovi messaggi in arrivo
-# Puoi specificare le chat da cui ascoltare inserendo chats=['@canale1', '@canale2']
+
 @client.on(events.NewMessage(incoming=True))
 async def new_message_handler(event):
-    # Appena arriva un messaggio, non lo analizza qui, ma lo butta subito nella coda.
-    # In questo modo Telegram non viene mai bloccato.
-    await message_queue.put(event)
+    text = event.message.message
+    if text:
+        # Usa la funzione di split
+        singoli_messaggi = split_multiple_offers(text)
+        for msg_text in singoli_messaggi:
+            # Creiamo un "falso" evento o accodiamo direttamente una tupla (chat, testo)
+            # Per semplicità, possiamo mettere nella coda solo i dati che ci servono:
+            await message_queue.put((event, msg_text))
 
 async def main():
-    # Avvia il worker in background
-    #for _ in range(2):
-    asyncio.create_task(message_worker())
+    # Avviamo 2 worker paralleli per smaltire più velocemente le allerte!
+    for _ in range(3):
+        asyncio.create_task(message_worker())
     
-    # Avvia il client Telegram
     await client.start()
     print("Userbot avviato con successo! In ascolto per nuovi messaggi...")
-    
-    # Mantiene in vita lo script fino alla disconnessione
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
-    # Esegue il loop di asyncio
     asyncio.run(main())
