@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 # --- CONFIGURAZIONI GLOBALI ---
 load_dotenv()
 KEYWORDS = os.getenv("KEYWORDS", "offerta,sconto,promo,amazon").split(",")
-PREMIUM_BRANDS = os.getenv("PREMIUM_BRANDS", "columbia,the north face").split(",")
+PREMIUM_BRANDS = os.getenv("PREMIUM_BRANDS", "columbia,the north face,stussy").split(",")
 BLACKLIST = os.getenv("BLACKLIST", "terminato,esaurito").split(",")
 
 # --- CONTESTO ---

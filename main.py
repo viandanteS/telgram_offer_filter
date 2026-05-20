@@ -5,10 +5,13 @@ from telethon import TelegramClient, events
 #messaggi multipli in unica stringa (bisogna dividerli in più messaggi e riportarli in coda)
 # Importiamo il nostro nuovo modulo di filtraggio!
 from filters import evaluate_message
+from keep_alive_server import start_web_server
+
 
 load_dotenv()
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
+SESSION_STRING = os.getenv("SESSION_STRING")
 
 # Prende l'ID del gruppo di destinazione. Se non c'è, usa 'me' di default
 DESTINATION_GROUP = os.getenv("DESTINATION_GROUP", "me")
@@ -19,7 +22,7 @@ try:
 except ValueError:
     pass # Lascialo come stringa (es. 'me' o '@username')
 
-client = TelegramClient('session_locale', API_ID, API_HASH)
+client = TelegramClient('SESSION_STRING', API_ID, API_HASH)
 message_queue = asyncio.Queue()
 
 def split_multiple_offers(text: str) -> list[str]:
@@ -27,6 +30,7 @@ def split_multiple_offers(text: str) -> list[str]:
     Divide un mega-messaggio e restituisce solo i blocchi che 
     assomigliano a vere offerte (es. contengono un link e un prezzo).
     """
+    
     if not text:
         return []
     
@@ -92,6 +96,9 @@ async def new_message_handler(event):
             await message_queue.put((event, msg_text))
 
 async def main():
+
+    await start_web_server()
+
     # Avviamo 2 worker paralleli per smaltire più velocemente le allerte!
     for _ in range(3):
         asyncio.create_task(message_worker())
