@@ -2,10 +2,9 @@ import os
 import asyncio
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
-#messaggi multipli in unica stringa (bisogna dividerli in più messaggi e riportarli in coda)
-# Importiamo il nostro nuovo modulo di filtraggio!
 from filters import evaluate_message
 from keep_alive_server import start_web_server
+from telethon.sessions import StringSession
 
 
 load_dotenv()
@@ -22,7 +21,7 @@ try:
 except ValueError:
     pass # Lascialo come stringa (es. 'me' o '@username')
 
-client = TelegramClient('SESSION_STRING', API_ID, API_HASH)
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 message_queue = asyncio.Queue()
 
 def split_multiple_offers(text: str) -> list[str]:
@@ -54,7 +53,7 @@ async def forward_to_remote(text: str, chat_name: str):
 
 async def message_worker():
     while True:
-        event = await message_queue.get()
+        event, text = await message_queue.get()
         text = event.message.message
         
         if text:
