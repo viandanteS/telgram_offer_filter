@@ -97,7 +97,7 @@ async def new_message_handler(event):
 
 async def main():
 
-    await start_web_server()
+    start_web_server()
 
     # Avviamo 2 worker paralleli per smaltire più velocemente le allerte!
     for _ in range(3):
