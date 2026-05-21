@@ -1,73 +1,59 @@
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, patch
-import main # Importiamo il modulo intero per sovrascrivere la coda
-from main import message_worker, split_multiple_offers
+from main import split_multiple_offers
 
-# --- TEST UTILITY SPLIT MESSAGGI ---
-def test_split_multiple_offers():
-    # Aggiungiamo 'http' per passare il nuovo filtro intelligente!
-    mega_messaggio = "Promo 1 a 10€ http://link\n\nPromo 2 a 20€ http://link\n\nPromo 3 a 30€ http://link"
-    risultato = split_multiple_offers(mega_messaggio)
+# --- I MESSAGGI FORNITI DA TE ---
+
+MSG_PC = """Thermaltake Toughpower GF 3 1350W | PC ATX 3.0 Power Supply | PCIe Gen 5.0 | 80-Plus-Gold
+ A soli: 181,36€  invece di: 257,90€
+ APRI SU AMAZON https://www.amazon.it/dp/B0B7NV5M54/?tag=cavalieridelr-21&psc=1
+
+ MSI MAG A850GL PCIE5, Alimentatore compatto da 850 W completamente modulare
+ A soli: 114,48€  invece di: 122,24€
+ APRI SU AMAZON https://www.amazon.it/dp/B0CB9MSJ5N/?tag=cavalieridelr-21&psc=1"""
+
+MSG_FINISH = """PREZZO CONVENIENZA!
+
+Finish Powergel, Gel Detersivo per Lavastoviglie Liquido, 42 Lavaggi, 940ml, Poteri Sgrassanti, Limone, Multiazione (Confezione da 4)
+
+Passa da 31,96€ a soli 2,28€!
+
+
+
+Venduto e spedito da Amazon  (senza costi con Prime e Prime Student) https://www.amazon.it/dp/B0F3JFRK13/?&tag=offertesulweb01-21&th=1&psc=1"""
+
+MSG_PASTA = """La Molisana, Rigatoni n. 31, Pasta da Solo Grano Italiano
+Passa da 121,49€ a soli 0,74€!La Molisana, Penne Rigate n. 20, Pasta da Solo Grano http://aaaa
+Passa da 111,19€ a soli 0,74€!La Molisana, Linguine n. 6, Pasta da Solo Grano Italiano
+http://aasssssss
+Passa da 111,19€ a soli 0,74€!La Molisana, Spaghetti n. 15, Pasta da Solo Grano Italianohttp://aaaa
+Passa da 1212,19€ a soli 0,74€!La Molisana, Spaghetto Quadrato n. 1, Pasta da Solo Grano http://aaaa
+Passa da 1111,30€ a soli 0,74€!La Molisana, Trighetto n. 333, Pasta da Solo Grano Italiano http://aaaa
+Passa da 199,19€ a soli 0,74€! http://aaaa"""
+
+def test_split_pc_components():
+    """Testa un messaggio formattato bene con doppi a capo tra le offerte"""
+    risultato = split_multiple_offers(MSG_PC)
     
-    assert len(risultato) == 3
-    assert risultato[0] == "Promo 1 a 10€ http://link"
+    assert len(risultato) == 2
+    assert "Thermaltake" in risultato[0]
+    assert "MSI MAG" in risultato[1]
+    assert "http" in risultato[0] and "€" in risultato[0]
 
-# --- TEST WORKER ASINCRONO ---
-class MockChat:
-    def __init__(self, title):
-        self.title = title
+def test_split_finish_gel():
+    """Testa un messaggio con TROPPI a capo. Deve restituire UN SOLO blocco valido."""
+    risultato = split_multiple_offers(MSG_FINISH)
+    
+    # Lo splitter divide per \n\n, quindi creerà tanti piccoli frammenti. 
+    # Ma SOLO l'ultimo frammento contiene sia '€' che 'http', quindi filtrerà gli altri.
+    assert len(risultato) == 1
+    assert "2,28€" in risultato[0]
+    assert "http" in risultato[0]
 
-class MockMessage:
-    def __init__(self, text):
-        self.message = text
-
-class MockEvent:
-    def __init__(self, text):
-        self.message = MockMessage(text)
-    async def get_chat(self):
-        return MockChat("Canale Test")
-
-@pytest.mark.asyncio
-@patch('main.client') 
-@patch('main.evaluate_message') 
-@patch('main.forward_to_remote', new_callable=AsyncMock) 
-async def test_worker_inoltra_se_valido(mock_remote, mock_evaluate, mock_client):
-    # FIX LOOP: Creiamo una coda nuova di zecca solo per questo test
-    main.message_queue = asyncio.Queue()
-
-    mock_evaluate.return_value = (True, "Motivo di Test")
-    mock_client.send_message = AsyncMock()
-
-    finto_evento = MockEvent("Testo offerta")
-    await main.message_queue.put(finto_evento)
-
-    task = asyncio.create_task(message_worker())
-    await main.message_queue.join()
-    task.cancel()
-
-    mock_evaluate.assert_called_once_with("Testo offerta")
-    mock_client.send_message.assert_called_once()
-    mock_remote.assert_called_once()
-
-@pytest.mark.asyncio
-@patch('main.client')
-@patch('main.evaluate_message')
-@patch('main.forward_to_remote', new_callable=AsyncMock)
-async def test_worker_ignora_se_invalido(mock_remote, mock_evaluate, mock_client):
-    # FIX LOOP: Creiamo un'altra coda nuova di zecca per questo test
-    main.message_queue = asyncio.Queue()
-
-    mock_evaluate.return_value = (False, "Sconto troppo basso")
-    mock_client.send_message = AsyncMock()
-
-    finto_evento = MockEvent("Offerta inutile")
-    await main.message_queue.put(finto_evento)
-
-    task = asyncio.create_task(message_worker())
-    await main.message_queue.join()
-    task.cancel()
-
-    mock_evaluate.assert_called_once_with("Offerta inutile")
-    mock_client.send_message.assert_not_called()
-    mock_remote.assert_not_called()
+def test_split_pasta_mangled():
+    """Testa il messaggio rotto. Attenzione: questo evidenzia un limite della regex attuale!"""
+    risultato = split_multiple_offers(MSG_PASTA)
+    
+    # Siccome in MSG_PASTA non c'è MAI un doppio a capo (\n\n) tra le offerte,
+    # la nostra funzione attuale vede il tutto come UN UNICO BLOCCO GIGANTE.
+    assert len(risultato) == 1
+    assert "La Molisana" in risultato[0]

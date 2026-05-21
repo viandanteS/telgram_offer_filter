@@ -24,10 +24,24 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 message_queue = asyncio.Queue()
 
 def split_multiple_offers(text: str) -> list[str]:
+    """
+    Divide un mega-messaggio e restituisce solo i blocchi che 
+    assomigliano a vere offerte (es. contengono un link e un prezzo).
+    """
     if not text:
         return []
     
-    raw_chunks = re.split('\n\n|➿+', text)
+    # --- IL FIX INTELLIGENTE ---
+    # Se c'è al massimo 1 link, è palesemente una singola offerta.
+    # Non la affettiamo, verifichiamo solo che sia valida e la restituiamo intera.
+    if text.count("http") <= 1:
+        if "http" in text and ("€" in text or "%" in text):
+            return [text.strip()]
+        return []
+
+    # Se ci sono PIÙ link, allora è un mega-messaggio. 
+    # Tentiamo la divisione per due o più a capo consecutivi (\n{2,})
+    raw_chunks = re.split(r'\n{2,}|➿+', text)
     valid_chunks = []
     
     for chunk in raw_chunks:
@@ -61,6 +75,7 @@ async def message_worker():
                 print(f"❌ Ignorato: {reason}")
         
         message_queue.task_done()
+        
 @client.on(events.NewMessage(incoming=True))
 async def new_message_handler(event):
     testo_crudo = event.message.message
