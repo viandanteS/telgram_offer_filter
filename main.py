@@ -1,3 +1,4 @@
+import datetime
 import os
 import asyncio
 import re
@@ -23,41 +24,6 @@ except ValueError:
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 message_queue = asyncio.Queue()
-
-def split_multiple_offers(text: str) -> list[str]:
-    """
-    Divide un mega-messaggio accumulando i pezzi finché 
-    non formano un'offerta completa (Link + Prezzo).
-    """
-    if not text:
-        return []
-    
-    # FIX: Se c'è al massimo 1 link, O AL MASSIMO 2 SIMBOLI €, è un'offerta singola!
-    if text.count("http") <= 1 or text.count("€") <= 2:
-        if "http" in text and ("€" in text or "%" in text):
-            return [text.strip()]
-        return []
-    
-    # Se ci sono più link, tagliamo per gli a capo...
-    raw_chunks = re.split(r'\n{2,}|➿+', text)
-    valid_chunks = []
-    buffer_chunk = ""
-    
-    # ...ma poi li RIUNIAMO in modo intelligente!
-    for chunk in raw_chunks:
-        buffer_chunk += chunk + "\n\n"
-        
-        # Appena il nostro 'cesto' contiene sia un link che un simbolo di prezzo/sconto, lo chiudiamo
-        if "http" in buffer_chunk and ("€" in buffer_chunk or "%" in buffer_chunk):
-            valid_chunks.append(buffer_chunk.strip())
-            buffer_chunk = ""  # Svuota il cesto per l'eventuale offerta successiva
-            
-    # Rete di sicurezza vitale: se il coltello ha fatto danni e non ha trovato nulla,
-    # ma il testo originale aveva tutto il necessario, non lo perdiamo!
-    if not valid_chunks and "http" in text and ("€" in text or "%" in text):
-        return [text.strip()]
-        
-    return valid_chunks
 
 
 
@@ -94,7 +60,8 @@ async def message_worker():
                 await client.send_message(DESTINATION_GROUP, alert_msg)
                 await forward_to_remote(text, chat_name)
             else:
-                print(f"❌ Ignorato: {reason}")
+                ct = datetime.datetime.now().strftime("%m/%d %H:%M:%S")
+                print(f"{ct} ❌ Ignorato: {reason}")
         
         message_queue.task_done()
 
@@ -141,8 +108,47 @@ async def new_message_handler(event):
             # Questo fermerà Sunbet, Welcome to Favelas e qualsiasi altro store non in whitelist
             print(f"❌ Scartato a monte: Nessun link Amazon/Zalando valido trovato nel testo.")
 
+
+def split_multiple_offers(text: str) -> list[str]:
+    """
+    Divide un mega-messaggio accumulando i pezzi finché 
+    non formano un'offerta completa (Link + Prezzo).
+    """
+    if not text:
+        return []
+    
+    # FIX: Se c'è al massimo 1 link, O AL MASSIMO 2 SIMBOLI €, è un'offerta singola!
+    if text.count("http") <= 1 or text.count("€") <= 2:
+        if "http" in text and ("€" in text or "%" in text):
+            return [text.strip()]
+        return []
+    
+    # Se ci sono più link, tagliamo per gli a capo...
+    raw_chunks = re.split(r'\n{2,}|➿+|\n\s*[-—–_~]+\s*\n', text)
+    valid_chunks = []
+    buffer_chunk = ""
+    
+    # ...ma poi li RIUNIAMO in modo intelligente!
+    for chunk in raw_chunks:
+        buffer_chunk += chunk + "\n\n"
+        
+        # Appena il nostro 'cesto' contiene sia un link che un simbolo di prezzo/sconto, lo chiudiamo
+        if "http" in buffer_chunk and ("€" in buffer_chunk or "%" in buffer_chunk):
+            valid_chunks.append(buffer_chunk.strip())
+            buffer_chunk = ""  # Svuota il cesto per l'eventuale offerta successiva
+            
+    # Rete di sicurezza vitale: se il coltello ha fatto danni e non ha trovato nulla,
+    # ma il testo originale aveva tutto il necessario, non lo perdiamo!
+    if not valid_chunks and "http" in text and ("€" in text or "%" in text):
+        return [text.strip()]
+        
+    return valid_chunks
+
+
+
+
 async def main():
-    start_web_server()
+    #start_web_server()
     for _ in range(2):
         asyncio.create_task(message_worker())
     

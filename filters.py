@@ -10,6 +10,10 @@ KEYWORDS = os.getenv("KEYWORDS", "offerta,sconto,promo,amazon").split(",")
 PREMIUM_BRANDS = os.getenv("PREMIUM_BRANDS", "columbia,the north face,stussy").split(",")
 BLACKLIST = os.getenv("BLACK_LIST", "terminato,esaurito").split(",")
 
+
+PREMIUM_BRANDS_PERCDISC=45
+GENERAL_PERCDISC=50
+SUPEROFFERS_PERCDISC=80
 SUPER_OFFERS_ACTIVE = True 
 
 @dataclass
@@ -130,7 +134,7 @@ class ExtractorHandler(Handler):
 
 class KeywordHandler(Handler):
     def handle(self, context: OfferContext) -> tuple[bool, str]:
-        if SUPER_OFFERS_ACTIVE and context.discount_percent >= 90:
+        if SUPER_OFFERS_ACTIVE and context.discount_percent >= SUPEROFFERS_PERCDISC:
             context.brand_name = "SUPER OFFERTA"
             return super().handle(context)
 
@@ -151,12 +155,12 @@ class EvaluationHandler(Handler):
             return super().handle(context)
 
         if context.is_premium_brand:
-            if context.discount_percent >= 60:
+            if context.discount_percent >= PREMIUM_BRANDS_PERCDISC:
                 return super().handle(context)
             else:
                 return False, f"Scartato: Brand {context.brand_name} richiede 70%, trovato {context.discount_percent}%"
         else:
-            if context.discount_percent >= 50:
+            if context.discount_percent >= GENERAL_PERCDISC:
                 return super().handle(context)
             else:
                 return False, f"Scartato: Sconto generico insufficiente ({context.discount_percent}%)"
