@@ -148,7 +148,7 @@ def split_multiple_offers(text: str) -> list[str]:
 
 
 async def main():
-    #start_web_server()
+    start_web_server()
     for _ in range(2):
         asyncio.create_task(message_worker())
     
