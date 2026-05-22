@@ -3,8 +3,8 @@ import asyncio
 import re
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
-from telethon.tl.types import MessageEntityTextUrl # Serve per i link invisibili
-import filters # Importiamo tutto il modulo per poter cambiare il flag SUPER_OFFERS_ACTIVE
+from telethon.tl.types import MessageEntityTextUrl 
+import filters 
 from filters import evaluate_message
 from keep_alive_server import start_web_server
 from telethon.sessions import StringSession
@@ -14,6 +14,7 @@ API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 DESTINATION_GROUP = os.getenv("DESTINATION_GROUP", "me")
+ALLOWED_DOMAINS = ["amazon", "amzn", "amzlink", "zalando"]
 
 try:
     DESTINATION_GROUP = int(DESTINATION_GROUP)
@@ -25,57 +26,78 @@ message_queue = asyncio.Queue()
 
 def split_multiple_offers(text: str) -> list[str]:
     """
-    Divide un mega-messaggio e restituisce solo i blocchi che 
-    assomigliano a vere offerte (es. contengono un link e un prezzo).
+    Divide un mega-messaggio accumulando i pezzi finché 
+    non formano un'offerta completa (Link + Prezzo).
     """
     if not text:
         return []
     
-    # --- IL FIX INTELLIGENTE ---
-    # Se c'è al massimo 1 link, è palesemente una singola offerta.
-    # Non la affettiamo, verifichiamo solo che sia valida e la restituiamo intera.
-    if text.count("http") <= 1:
+    # FIX: Se c'è al massimo 1 link, O AL MASSIMO 2 SIMBOLI €, è un'offerta singola!
+    if text.count("http") <= 1 or text.count("€") <= 2:
         if "http" in text and ("€" in text or "%" in text):
             return [text.strip()]
         return []
-
-    # Se ci sono PIÙ link, allora è un mega-messaggio. 
-    # Tentiamo la divisione per due o più a capo consecutivi (\n{2,})
+    
+    # Se ci sono più link, tagliamo per gli a capo...
     raw_chunks = re.split(r'\n{2,}|➿+', text)
     valid_chunks = []
+    buffer_chunk = ""
     
+    # ...ma poi li RIUNIAMO in modo intelligente!
     for chunk in raw_chunks:
-        chunk_pulito = chunk.strip()
-        if "http" in chunk_pulito and ("€" in chunk_pulito or "%" in chunk_pulito):
-            valid_chunks.append(chunk_pulito)
+        buffer_chunk += chunk + "\n\n"
+        
+        # Appena il nostro 'cesto' contiene sia un link che un simbolo di prezzo/sconto, lo chiudiamo
+        if "http" in buffer_chunk and ("€" in buffer_chunk or "%" in buffer_chunk):
+            valid_chunks.append(buffer_chunk.strip())
+            buffer_chunk = ""  # Svuota il cesto per l'eventuale offerta successiva
             
+    # Rete di sicurezza vitale: se il coltello ha fatto danni e non ha trovato nulla,
+    # ma il testo originale aveva tutto il necessario, non lo perdiamo!
+    if not valid_chunks and "http" in text and ("€" in text or "%" in text):
+        return [text.strip()]
+        
     return valid_chunks
 
+
+
+
 async def forward_to_remote(text: str, chat_name: str):
-    print(f"[REMOTING] Invio al server remoto il messaggio da {chat_name}")
+    pass # Disattivato finché non implementi il server remoto
 
 async def message_worker():
     while True:
         event, text = await message_queue.get()
-        # BUG RISOLTO: Qui avevi scritto 'text = event.message.message'
-        # che cancellava lo split e rimetteva il messaggio intero!
         
         if text:
             chat = await event.get_chat()
             chat_name = getattr(chat, 'title', getattr(chat, 'first_name', 'Chat Sconosciuta'))
             
-            is_valid, reason = evaluate_message(text)
+            # SPACCHETTAMENTO DEI 3 VALORI DA FILTERS.PY
+            is_valid, reason, ctx = evaluate_message(text)
             
             if is_valid:
-                print(f"✅ {reason} - Da: {chat_name}")
-                alert_msg = f"🔔 **Trovato in {chat_name}**\n*Motivo: {reason}*\n\n{text}"
+                prezzo_str = f"{ctx.current_price:.2f}€" if ctx.current_price > 0 else "N/D"
+                # OUTPUT SUL TERMINALE
+                print(f"✅ {reason} | Prezzo: {prezzo_str} | Link: {ctx.link} - Da: {chat_name}")
+                
+                # OUTPUT SU TELEGRAM (Formattato e ricco di dettagli)
+                tipo_match = ctx.brand_name if ctx.brand_name else "Generica"
+                alert_msg = (
+                    f"🔔 **OFFERTA TROVATA IN: {chat_name}**\n"
+                    f"🔥 **Tipo:** {tipo_match}\n"
+                    f"📉 **Sconto:** {ctx.discount_percent}%\n"
+                    f"📝 **Log:** {reason}\n"
+                    + (f"➖" * 15) + "\n\n"
+                    + f"{text}"
+                )
                 await client.send_message(DESTINATION_GROUP, alert_msg)
                 await forward_to_remote(text, chat_name)
             else:
                 print(f"❌ Ignorato: {reason}")
         
         message_queue.task_done()
-        
+
 @client.on(events.NewMessage(incoming=True))
 async def new_message_handler(event):
     testo_crudo = event.message.message
@@ -86,29 +108,38 @@ async def new_message_handler(event):
     if testo_crudo.strip() == "activate n0w -superoffers":
         filters.SUPER_OFFERS_ACTIVE = not filters.SUPER_OFFERS_ACTIVE
         stato = "ATTIVATA 🔥" if filters.SUPER_OFFERS_ACTIVE else "DISATTIVATA ❄️"
-        await event.reply(f"Modalità Super Offerte (>90%) {stato}!")
+        msg = f"Modalità Super Offerte (>90%) {stato}!"
+        await event.reply(msg)
+        await client.send_message(DESTINATION_GROUP, msg)
         return 
 
-    # --- INIEZIONE DEI LINK NASCOSTI (Il Fix) ---
+    # --- INIEZIONE DEI LINK NASCOSTI (Solo domini autorizzati) ---
     if event.message.entities:
-        # 1. Isoliamo solo le entità che sono Link Nascosti
-        hidden_links = [ent for ent in event.message.entities if isinstance(ent, MessageEntityTextUrl)]
+        hidden_links = []
+        for ent in event.message.entities:
+            if isinstance(ent, MessageEntityTextUrl):
+                url_lower = ent.url.lower()
+                has_valid_domain = any(domain in url_lower for domain in ALLOWED_DOMAINS)
+                if has_valid_domain and "whatsapp" not in url_lower:
+                    hidden_links.append(ent)
         
-        # 2. Le ordiniamo AL CONTRARIO in base alla posizione (offset)
         hidden_links.sort(key=lambda x: x.offset, reverse=True)
         
-        # 3. Inseriamo ogni URL nel testo crudo subito dopo la parola cliccata
         for ent in hidden_links:
             inserimento = ent.offset + ent.length
-            # Tagliamo la stringa in due e ci infiliamo il link in mezzo
-            testo_crudo = testo_crudo[:inserimento] + f" {ent.url}" + testo_crudo[inserimento:]
+            testo_crudo = testo_crudo[:inserimento] + f" {ent.url} " + testo_crudo[inserimento:]
 
-    # Ora il 'testo_crudo' ha tutti i link svelati e posizionati esattamente
-    # nei loro rispettivi blocchi. Lo split funzionerà alla perfezione!
+    # Affettiamo il messaggio se necessario
     singoli_messaggi = split_multiple_offers(testo_crudo)
     
+    # --- IL FILTRO BUTTAFUORI GENERALE ---
     for msg_text in singoli_messaggi:
-        await message_queue.put((event, msg_text))
+        # Controlliamo SE il pezzo contiene ALMENO uno dei domini autorizzati (sia in chiaro che srotolato)
+        if any(domain in msg_text.lower() for domain in ALLOWED_DOMAINS):
+            await message_queue.put((event, msg_text))
+        else:
+            # Questo fermerà Sunbet, Welcome to Favelas e qualsiasi altro store non in whitelist
+            print(f"❌ Scartato a monte: Nessun link Amazon/Zalando valido trovato nel testo.")
 
 async def main():
     start_web_server()
