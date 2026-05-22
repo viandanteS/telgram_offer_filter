@@ -11,9 +11,9 @@ PREMIUM_BRANDS = os.getenv("PREMIUM_BRANDS", "columbia,the north face,stussy").s
 BLACKLIST = os.getenv("BLACK_LIST", "terminato,esaurito").split(",")
 
 
-PREMIUM_BRANDS_PERCDISC=45
+PREMIUM_BRANDS_PERCDISC=55
 GENERAL_PERCDISC=50
-SUPEROFFERS_PERCDISC=80
+SUPEROFFERS_PERCDISC=85
 SUPER_OFFERS_ACTIVE = True 
 
 @dataclass
@@ -84,18 +84,47 @@ class ExplicitPercentageExtractor(ExtractorStrategy):
             
         return max([int(m) for m in matches]) if matches else 0
     
+class PatternPriceExtractor(ExtractorStrategy):
+    """Cerca pattern espliciti come '10,00€ invece di 20,00€' o '10,00€ anziché 20,00€'"""
+    def extract(self, context: OfferContext) -> int:
+        # Regex infallibile per "PREZZO_NUOVO invece di PREZZO_VECCHIO"
+        pattern = r'([\d\.,]+)\s*€?\s*(?:invece\s+di|anziché|anziche|al\s+posto\s+di|da)\s*([\d\.,]+)\s*€?'
+        matches = re.findall(pattern, context.text_lower)
+        
+        if matches:
+            # Prendiamo il primo match utile
+            for new_p_str, old_p_str in matches:
+                # Ricicliamo la nostra robusta parse_prices per gestire virgole e punti!
+                new_p = parse_prices(new_p_str + "€")
+                old_p = parse_prices(old_p_str + "€")
+                
+                if new_p and old_p:
+                    current_price = min(new_p[0], old_p[0])
+                    old_price = max(new_p[0], old_p[0])
+                    
+                    if old_price > 0 and current_price < old_price:
+                        context.old_price = old_price
+                        context.current_price = current_price
+                        return int(((old_price - current_price) / old_price) * 100)
+        return 0
+
 class MathPriceExtractor(ExtractorStrategy):
     def extract(self, context: OfferContext) -> int:
-        prices = parse_prices(context.text)
+        
+        # Lasciamo intatto il "Prezzo Medio Vendita" così può usarlo come prezzo vecchio!
+        clean_text = re.sub(r'(?i)(?:minimo\s*storico|prezzo\s*minimo)[ \t:\-]*[\d\.,]+\s*€?', '', context.text)
+        
+        prices = parse_prices(clean_text)
         
         if len(prices) >= 2:
-            # La tua logica intatta: il prezzo massimo è il vecchio, il minimo è il nuovo
             old_price, current_price = max(prices), min(prices)
             
             if old_price > 0 and current_price < old_price:
                 context.old_price = old_price
                 context.current_price = current_price
                 return int(((old_price - current_price) / old_price) * 100)
+                
+        return 0
                 
         return 0
 
@@ -174,7 +203,12 @@ class BlacklistHandler(Handler):
         return True, f"Match Perfetto! {brand_str}Sconto: {context.discount_percent}%"
 
 def build_filter_pipeline() -> Handler:
-    head = ExtractorHandler(strategies=[ExplicitPercentageExtractor(), MathPriceExtractor()])
+    head = ExtractorHandler(strategies=[
+        ExplicitPercentageExtractor(),
+        PatternPriceExtractor(),
+        MathPriceExtractor()
+        ])
+    
     head.set_next(KeywordHandler()) \
         .set_next(EvaluationHandler()) \
         .set_next(BlacklistHandler())

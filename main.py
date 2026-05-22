@@ -124,7 +124,7 @@ def split_multiple_offers(text: str) -> list[str]:
         return []
     
     # Se ci sono più link, tagliamo per gli a capo...
-    raw_chunks = re.split(r'\n{2,}|➿+|\n\s*[-—–_~]+\s*\n', text)
+    raw_chunks = re.split(r'\n{2,}|➿+|\n\s*[-—–_~]{2,}\s*', text)
     valid_chunks = []
     buffer_chunk = ""
     
